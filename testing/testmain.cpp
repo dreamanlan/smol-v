@@ -919,8 +919,8 @@ namespace vk
         // NOTE: we don't want to break compatibility of shaders in existing asset bundles with newer versions of Unity,
         //       so we can only add new data members to the bottom of this struct, and increase the version and/or add new flags
         static const uint32_t kFlagsMask = (1 << 24) - 1; // bits 0..23
-        static const uint32_t kShaderStageCount = 6;
-        static const uint32_t kHashSizeBytes = 16;
+        static const int32_t kShaderStageCount = 6;
+        static const int32_t kHashSizeBytes = 16;
 
         ShaderProgramFlags flags;
         ShaderFormatHeader shaders[kShaderStageCount];      // kVKShaderRayTracing was added some time before the version number was added and before 'stageFlags' were added
@@ -1051,12 +1051,36 @@ namespace vk
         // The most reliable workaround so far is to preserve OpName of vertex shader outputs.
         return BeginsWith(name, "vs_TEXCOORD");
     }
+
+    static bool ReadSavedShaderData(const char* fileName, ByteArray& output)
+    {
+        if (!ReadFile(fileName, output))
+            return false;
+        if (output.size() < sizeof(ShaderSetHeader)) {
+            output.clear();
+            return false;
+        }
+        if (output[0] >= ' ' && output[1] >= ' ' && output[2] >= ' ' && output[3] >= ' ') {
+            for (int i = 0; i < output.size(); ++i) {
+                if (output[i] == '\n') {
+                    output.erase(output.cbegin(), output.cbegin() + i + 1);
+                    break;
+                }
+                else if (output[i] < ' ') {
+                    output.clear();
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
 } // namespace vk
 
 int main(int argc, const char* argv[])
 {
     bool isUnity2Spirv = false;
-    const char* pUnityFile = nullptr;
+    const char* pDataFile = nullptr;
+    const char* pOutFile = nullptr;
     const char* pVsFile = nullptr;
     const char* pFsFile = nullptr;
     bool error = argc <= 1;
@@ -1066,7 +1090,7 @@ int main(int argc, const char* argv[])
         if (0 == _stricmp(arg, "-u2s")) {
             isUnity2Spirv = true;
             if (j < argc && argv[j][0] != '-') {
-                pUnityFile = argv[j];
+                pDataFile = argv[j];
                 i = j;
             }
             else {
@@ -1076,7 +1100,16 @@ int main(int argc, const char* argv[])
         else if (0 == _stricmp(arg, "-s2u")) {
             isUnity2Spirv = false;
             if (j < argc && argv[j][0] != '-') {
-                pUnityFile = argv[j];
+                pDataFile = argv[j];
+                i = j;
+            }
+            else {
+                error = true;
+            }
+        }
+        else if (0 == _stricmp(arg, "-o")) {
+            if (j < argc && argv[j][0] != '-') {
+                pOutFile = argv[j];
                 i = j;
             }
             else {
@@ -1113,28 +1146,31 @@ int main(int argc, const char* argv[])
         printf("\tsmol-v-test -s2u shader.dat -vs vert.spv -fs frag.spv\n");
         printf("\tsmol-v-test -s2u shader.dat -vs vert.spv\n");
         printf("\tsmol-v-test -s2u shader.dat -fs frag.spv\n");
+        printf("\tsmol-v-test -s2u shader.dat -o new.dat -vs vert.spv -fs frag.spv\n");
+        printf("\tsmol-v-test -s2u shader.dat -o new.dat -vs vert.spv\n");
+        printf("\tsmol-v-test -s2u shader.dat -o new.dat -fs frag.spv\n");
         return 0;
     }
     if (isUnity2Spirv) {
-        std::string datFile{};
+        std::string dataFile{};
         std::string vsFile{};
         std::string fsFile{};
 
-        if (pUnityFile)
-            datFile = pUnityFile;
+        if (pDataFile)
+            dataFile = pDataFile;
 
         if (pVsFile)
             vsFile = pVsFile;
         else
-            vsFile = datFile + ".spv";
+            vsFile = dataFile + ".spv";
 
         if (pFsFile)
             fsFile = pFsFile;
         else
-            fsFile = datFile + ".spv";
+            fsFile = dataFile + ".spv";
 
         ByteArray datArray{};
-        if (ReadFile(datFile.c_str(), datArray) && vk::ShaderSetHeader::CheckValid(datArray.data(), datArray.size())) {
+        if (vk::ReadSavedShaderData(dataFile.c_str(), datArray) && vk::ShaderSetHeader::CheckValid(datArray.data(), datArray.size())) {
             auto* pHeader = reinterpret_cast<vk::ShaderSetHeader*>(datArray.data());
             for (int i = 0; i < vk::kShaderStageCount; ++i) {
                 pHeader->PrintInfo(i);
@@ -1173,24 +1209,31 @@ int main(int argc, const char* argv[])
             }
         }
         else {
-            printf("read %s failed.\n", datFile.c_str());
+            printf("read %s failed.\n", dataFile.c_str());
         }
     }
     else {
-        std::string datFile{};
+        std::string dataFile{};
+        std::string outFile{};
         std::string vsFile{};
         std::string fsFile{};
 
-        if (pUnityFile)
-            datFile = pUnityFile;
+        if (pDataFile)
+            dataFile = pDataFile;
+
+        if (pOutFile)
+            outFile = pOutFile;
+        else
+            outFile = dataFile;
 
         if (pVsFile)
             vsFile = pVsFile;
+
         if (pFsFile)
             fsFile = pFsFile;
 
         ByteArray datArray{};
-        if (ReadFile(datFile.c_str(), datArray) && vk::ShaderSetHeader::CheckValid(datArray.data(), datArray.size())) {
+        if (vk::ReadSavedShaderData(dataFile.c_str(), datArray) && vk::ShaderSetHeader::CheckValid(datArray.data(), datArray.size())) {
             uint32_t flags = 0;
 #if NDEBUG
             flags = smolv::kEncodeFlagStripDebugInfo;
@@ -1257,17 +1300,17 @@ int main(int argc, const char* argv[])
                 int i = vulkanGraphicsStages[ix];
                 if (i == vk::kShaderStageVertex && vsArray.size() > 0) {
                     pOutHeader->shaders[i].offsetBytes = offset;
-                    pOutHeader->shaders[i].size = vsArray.size();
+                    pOutHeader->shaders[i].size = static_cast<uint32_t>(vsArray.size());
                     memcpy(pOutHeader->shaderProgramHashes[i], vsHash, c_hash_size);
                     memcpy(outArray.data() + offset, vsArray.data(), vsArray.size());
-                    offset += vsArray.size();
+                    offset += pOutHeader->shaders[i].size;
                 }
                 else if (i == vk::kShaderStageFragment && fsArray.size() > 0) {
                     pOutHeader->shaders[i].offsetBytes = offset;
-                    pOutHeader->shaders[i].size = fsArray.size();
+                    pOutHeader->shaders[i].size = static_cast<uint32_t>(fsArray.size());
                     memcpy(pOutHeader->shaderProgramHashes[i], fsHash, c_hash_size);
                     memcpy(outArray.data() + offset, fsArray.data(), fsArray.size());
-                    offset += fsArray.size();
+                    offset += pOutHeader->shaders[i].size;
                 }
                 else if (pHeader->shaders[i].offsetBytes != 0 && pHeader->shaders[i].size != 0) {
                     pOutHeader->shaders[i].offsetBytes = offset;
@@ -1276,17 +1319,17 @@ int main(int argc, const char* argv[])
                 }
             }
 
-            FILE* fout = fopen(datFile.c_str(), "wb");
+            FILE* fout = fopen(outFile.c_str(), "wb");
             if (fout) {
                 fwrite(outArray.data(), sizeof(uint8_t), outArray.size(), fout);
                 fclose(fout);
             }
             else {
-                printf("write %s failed.\n", datFile.c_str());
+                printf("write %s failed.\n", outFile.c_str());
             }
         }
         else {
-            printf("read %s failed.\n", datFile.c_str());
+            printf("read %s failed.\n", dataFile.c_str());
         }
     }
     return 0;
