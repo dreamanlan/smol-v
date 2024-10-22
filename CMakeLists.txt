@@ -31,6 +31,11 @@ target_sources(smol-v-test PRIVATE
 	testing/external/zstd/compress/zstd_lazy.c
 	testing/external/zstd/compress/zstd_ldm.c
 	testing/external/zstd/compress/zstd_opt.c
+	testing/external/hash/src/xxhash.c
+	testing/external/hash/city.cpp
+	testing/external/hash/md5.cpp
+	testing/external/hash/SpookyV2.cpp
+	testing/external/hash/xxhash.c
 )
 target_include_directories(smol-v-test PRIVATE
 	testing/external/zstd
